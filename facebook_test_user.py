@@ -49,12 +49,11 @@ class FacebookUserAccess(object):
         logging.debug("get_app_access_token response: %s" % response.text)
 
         # Parse response and find token.
-        for response_part in response.text.split('&'):
-            split_response_part = response_part.split('=')
-            if len(split_response_part) == 2 and split_response_part[0] == 'access_token':
-                return split_response_part[1]
+        for response_param in response.text.split('&'):
+            name, value = response_param.partition('=')[::2]
+            if name == 'access_token':
+                return value
 
-        # Could not locate access token.
         raise FacebookAPIError("Could not determine application access token from response: %r." % response.text)
 
     @property
@@ -162,7 +161,7 @@ class TestUser(object):
     A lightweight class for creating and utilizing Facebook test users through
     Facebook Graph API.
     """
-    # Default values. Setting to None will create no default.
+    # Default values in actually generating test user. Setting to None will create no default.
     generate_user_installed = True
     generate_user_permissions = 'email'
     generate_name = None
@@ -172,7 +171,15 @@ class TestUser(object):
 
     def __init__(self, **kwargs):
         """
-        Creates a test user.
+        Creates a test user. Instantiated with keyword arguments:
+            app_access_token    application access token; fetches from API if not passed.
+            delete_user         boolean to determine whether to delete test user when object
+                                is deleted. Defaults to True.
+            installed           boolean if application is pre-installed for test user.
+            permissions         the type of permissions that test user grants.
+            name                the name of the test user. Not required.
+            locale              the locale of test user.
+            id                  the id of test user. Not required.
         """
         # Set application access token.
         self.app_access_token = kwargs.get('app_access_token', FacebookUserAccess.get_app_access_token())
