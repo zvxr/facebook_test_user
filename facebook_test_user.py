@@ -2,11 +2,8 @@ import json
 import requests
 
 from config import FB_APP_ID, FB_APP_SECRET, FB_HOST
+from exception import FacebookResponseError, FacebookNotFoundError
 from log import logging
-
-
-class FacebookAPIError(Exception):
-    pass
 
 
 class FacebookUserAccess(object):
@@ -40,11 +37,9 @@ class FacebookUserAccess(object):
         Requires constants FB_APP_ID and FB_APP_SECRET to be set.
         """
         url = FB_HOST + "/oauth/access_token"
-
         params = {'client_id': FB_APP_ID,
                   'client_secret': FB_APP_SECRET,
                   'grant_type': 'client_credentials'}
-
         response = requests.get(url, params=params)
         logging.debug("get_app_access_token response: %s" % response.text)
 
@@ -54,7 +49,7 @@ class FacebookUserAccess(object):
             if name == 'access_token':
                 return value
 
-        raise FacebookAPIError("Could not determine application access token from response: %r." % response.text)
+        raise FacebookResponseError("Could not determine application access token from response: %r." % response.text)
 
     @property
     def access_token(self):
@@ -86,6 +81,21 @@ class FacebookUserAccess(object):
     def access_code(self, access_code):
         self._access_code = access_code
 
+    def _get_json(self, response):
+        """
+        Returns JSON as dictionary from requests response object (positional argument).
+        Will throw exception if contains no JSON object, or an error field exists in object.
+        """
+        try:
+            response_dict = response.json()
+        except ValueError:
+            raise FacebookResponseError("Unexpected response. No JSON object could be decoded.")
+
+        if 'error' in response_dict:
+            raise FacebookResponseError("Error in response: %r" % response_dict['error'])
+
+        return response_dict
+
     def get_access_token(self):
         """
         Calls API to get user's short-term access token from list of test users.
@@ -96,15 +106,15 @@ class FacebookUserAccess(object):
         logging.debug("generate_short_user_token response: %s" % response.text)
 
         # Find test user.
-        for user in response.json().get('data'):
+        for user in self._get_json(response).get('data'):
             if user.get('id') == str(self.id):
                 access_token = user.get('access_token')
                 if not access_token:
-                    raise FacebookAPIError("User %s located, but does not have access_token." % self.id)
+                    raise FacebookResponseError("User %s located, but does not have access_token." % self.id)
                 logging.debug("user access_token: %s" % access_token)
                 return access_token
 
-        raise FacebookAPIError("Unable to find user %s from response." % self.id)
+        raise FacebookNotFoundError("Unable to find user from response.")
 
     def get_long_term_access_token(self):
         """
@@ -124,7 +134,7 @@ class FacebookUserAccess(object):
             if name == "access_token":
                 return value
 
-        raise FacebookAPIError("Unable to find access token from response.")
+        raise FacebookNotFoundError("Unable to find access token from response.")
 
     def get_access_code(self, redirect_uri=""):
         """
@@ -140,20 +150,42 @@ class FacebookUserAccess(object):
         response = requests.get(url, params=params)
         logging.debug("get_access_code response: %s" % response.text)
 
-        try:
-            response_dict = response.json()
-        except ValueError:
-            raise FacebookAPIError("Unexpected response. No JSON object could be decoded.")
-
-        if 'error' in response_dict:
-            raise FacebookAPIError("Error in response: %r" % response_dict['error'])
-
-        access_code = response_dict.get('code')
-
+        access_code = self._get_json(response).get('code')
         if not access_code:
             logging.warn("No access_code in response.")
-
         return access_code
+
+    def get_page_permissions(self):
+        """
+        Calls API using user access token to retrieve pages user admins. Data is returned
+        as a list of dictionaries, which includes:
+            category
+            name
+            access_token
+            id
+            perms           a list of admin roles (e.g. "ADMINISTER", "EDIT_PROFILE", etc.)
+
+        This call requires that test user be granted 'manage_pages' permissions.
+        Returns an empty list if user has no page permissions.
+        """
+        url = FB_HOST + "/%s/accounts" % self.id
+        params = {'access_token': self.access_token}
+        response = requests.get(url, params=params)
+        logging.debug("get_page_data response: %s" % response.text)
+        return self._get_json(response).get('data')
+
+    def get_permissions(self):
+        """
+        Calls API using app access token and returns a list of dictionaries containing
+        user's permissions:
+            permission
+            status
+        """
+        url = FB_HOST + "/%s/permissions" % self.id
+        params = {'access_token': self.app_access_token}
+        response = requests.get(url, params=params)
+        logging.debug("get_permissions response: %s" % response.text)
+        return self._get_json(response).get('data')
 
 
 class TestUser(object):
@@ -211,8 +243,6 @@ class TestUser(object):
         else:
             logging.info("delete user: false")
 
-        return
-
     def generate_user(self, **kwargs):
         """
         Calls API to generate a new test user.
@@ -233,7 +263,7 @@ class TestUser(object):
         response_dict = response.json()
 
         if 'error' in response_dict:
-            raise FacebookAPIError("Error generating test user: %s" % response_dict['error'])
+            raise FacebookResponseError("Error generating test user: %s" % response_dict['error'])
 
         return response_dict
 
@@ -242,16 +272,22 @@ def test():
     app_access_token = FacebookUserAccess.get_app_access_token()
 
     logging.info("Generating test user...")
-    testuser = TestUser(app_access_token=app_access_token)
+    testuser = TestUser(app_access_token=app_access_token, permissions='email, manage_pages')
 
     logging.info("Getting short term user token...")
-    testuser.user_access.access_token
+    assert(testuser.user_access.access_token)
 
     logging.info("Getting long term user token...")
-    testuser.user_access.long_term_access_token
+    assert(testuser.user_access.long_term_access_token)
 
     logging.info("Getting access code...")
-    testuser.user_access.access_code
+    assert(testuser.user_access.access_code)
+
+    logging.info("Getting user permissions...")
+    assert(testuser.user_access.get_permissions())
+
+    logging.info("Getting page tokens...")
+    assert(not testuser.user_access.get_page_permissions())
 
 if __name__ == "__main__":
     test()
