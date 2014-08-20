@@ -86,6 +86,16 @@ class FacebookUserAccess(object):
     def access_code(self, access_code):
         self._access_code = access_code
 
+    @property
+    def page_token(self):
+        if not self._page_token:
+            self._page_token = self.get_page_token()
+        return self._page_token
+
+    @access_code.setter
+    def page_token(self, page_token):
+        self._page_token = page_token
+
     def get_access_token(self):
         """
         Calls API to get user's short-term access token from list of test users.
@@ -149,12 +159,37 @@ class FacebookUserAccess(object):
             raise FacebookAPIError("Error in response: %r" % response_dict['error'])
 
         access_code = response_dict.get('code')
-
         if not access_code:
             logging.warn("No access_code in response.")
 
         return access_code
 
+    def get_page_data(self):
+        """
+        Calls API to get page data as dictionary, which includes page token.
+        "manage_pages" permissions must first be granted.
+        """
+        url = FB_HOST + "/%s/accounts" % self.id
+        params = {'access_token': self.access_token,
+                  'client_id': FB_APP_ID,
+                  'client_secret': FB_APP_SECRET}
+
+        response = requests.get(url, params=params)
+        logging.debug("get_page_data response: %s" % response.text)
+
+        try:
+            response_dict = response.json()
+        except ValueError:
+            raise FacebookAPIError("Unexpected response. No JSON object could be decoded.")
+
+        if 'error' in response_dict:
+            raise FacebookAPIError("Error in response: %r" % response_dict['error'])
+
+        page_data = response_dict.get('data')
+        if not page_data:
+            logging.warn("No data object in response.")
+
+        return page_data
 
 class TestUser(object):
     """
